@@ -1,7 +1,0 @@
-NICHT die ZIP-Datei selbst in GitHub hochladen.
-
-Stattdessen ZIP entpacken und ALLE darin enthaltenen Dateien/Ordner direkt
-in das Hauptverzeichnis des GitHub-Repositories hochladen.
-
-settings.gradle.kts muss direkt im Repository-Root liegen.
-app/build.gradle.kts muss direkt unter app/ liegen.

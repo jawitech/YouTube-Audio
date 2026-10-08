@@ -9,29 +9,45 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build APK
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and extract project ZIP
+      - name: Find project ZIP
         shell: bash
         run: |
           set -eux
 
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -name '*.zip' | head -n 1)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "Keine ZIP-Datei gefunden."
+            echo "FEHLER: Keine ZIP-Datei im Repository gefunden."
             exit 1
           fi
 
-          mkdir -p project
-          unzip -q "$ZIP_FILE" -d project
+          echo "Gefundene ZIP-Datei:"
+          echo "$ZIP_FILE"
 
-          echo "Entpackter Inhalt:"
-          find project -maxdepth 3 -type f | sort
+          mkdir -p "$GITHUB_WORKSPACE/project"
+          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/project"
+
+          echo "Projektdateien:"
+          find "$GITHUB_WORKSPACE/project" -maxdepth 4 -type f | sort
+
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -eux
+
+          test -f "$GITHUB_WORKSPACE/project/settings.gradle.kts"
+          test -f "$GITHUB_WORKSPACE/project/build.gradle.kts"
+          test -f "$GITHUB_WORKSPACE/project/app/build.gradle.kts"
+          test -f "$GITHUB_WORKSPACE/project/app/src/main/AndroidManifest.xml"
+
+          echo "Android-Projekt wurde erfolgreich gefunden."
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -39,23 +55,52 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-            - name: Set up Android SDK
+      - name: Configure Android SDK
         shell: bash
         run: |
           set -eux
 
-          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
-          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "/usr/local/lib/android/sdk/platform-tools" >> "$GITHUB_PATH"
+          if [ -d "/usr/local/lib/android/sdk" ]; then
+            SDK="/usr/local/lib/android/sdk"
+          elif [ -d "$ANDROID_HOME" ]; then
+            SDK="$ANDROID_HOME"
+          elif [ -d "$ANDROID_SDK_ROOT" ]; then
+            SDK="$ANDROID_SDK_ROOT"
+          else
+            echo "FEHLER: Android SDK wurde nicht gefunden."
+            exit 1
+          fi
 
-          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          echo "Android SDK: $SDK"
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+            SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager -executable | head -n 1)"
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "FEHLER: sdkmanager wurde nicht gefunden."
+            find "$SDK" -maxdepth 4 -type f -name sdkmanager -print || true
+            exit 1
+          fi
+
+          echo "sdkmanager: $SDKMANAGER"
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+
+          yes | "$SDKMANAGER" --licenses || true
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -eux
 
-          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
+          "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"
@@ -64,19 +109,37 @@ jobs:
         shell: bash
         run: |
           set -eux
-          curl -fL --retry 5 \
-            -o /tmp/gradle.zip \
-            https://services.gradle.org/distributions/gradle-8.13-bin.zip
 
-          unzip -q /tmp/gradle.zip -d /tmp
+          curl -fL --retry 5 \
+            -o /tmp/gradle-8.13-bin.zip \
+            "https://services.gradle.org/distributions/gradle-8.13-bin.zip"
+
+          rm -rf /tmp/gradle-8.13
+          unzip -q /tmp/gradle-8.13-bin.zip -d /tmp
+
           echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
 
           /tmp/gradle-8.13/bin/gradle --version
 
       - name: Build debug APK
         working-directory: project
+        shell: bash
         run: |
-          gradle :app:assembleDebug --stacktrace --no-daemon
+          set -eux
+
+          gradle \
+            :app:assembleDebug \
+            --stacktrace \
+            --no-daemon
+
+      - name: Check APK
+        shell: bash
+        run: |
+          set -eux
+
+          ls -lah project/app/build/outputs/apk/debug/
+
+          test -n "$(find project/app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
